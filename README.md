@@ -2,7 +2,7 @@
 ---
 
 ```markdown
-**PC + Bastion + Private ASG + (Internal) ALB — Terraform PoC** 
+# VPC + Bastion + Private ASG + (Internal) ALB — Terraform PoC
 
 > **Goal:** One VPC (`10.1.0.0/16`) with three subnets spread across two AZs, a public Bastion host, a private Application tier running Apache in an Auto Scaling Group (ASG), and an ALB that sends web traffic to the ASG. 
  ![poc-architecture-diagram](https://github.com/eli-pro-git/cft-tf-challenge/blob/master/poc-architecture-diagram.png?raw=true)
