@@ -5,9 +5,9 @@
 # VPC + Bastion + Private ASG + (Internal) ALB — Terraform PoC
 
 > **Goal:** One VPC (`10.1.0.0/16`) with three subnets spread across two AZs, a public Bastion host, a private Application tier running Apache in an Auto Scaling Group (ASG), and an ALB that sends web traffic to the ASG. 
- ![poc-architecture-diagram](poc-architecture-diagram.png)
+ ![poc-architecture-diagram](https://github.com/eli-pro-git/cft-tf-challenge/blob/master/poc-architecture-diagram.png?raw=true)
 > **Note:** If your account currently lacks ELB/ALB permissions, see **[Test Without ALB](#test-without-alb)**.
-![ALB error](image.png)
+![ALB error](https://github.com/eli-pro-git/cft-tf-challenge/blob/master/image.png?raw=true)
 
 ---
 
@@ -26,12 +26,12 @@
 ### Diagram & Screenshots
 
 - **Diagram:**  
-  ![Architecture Diagram](docs/assets/diagram.png)
+  ![Architecture Diagram](https://github.com/eli-pro-git/cft-tf-challenge/blob/master/poc-architecture-diagram.png?raw=true)
 
 - **Screenshots:**  
-  - Bastion instance: ![Bastion](image-2.png)  
-  - Subnets/Routes: ![subnets route](image-1.png)  
-  - ALB Error / Service Limitation: ![ALB Error](image.png)
+  - Bastion instance: ![Bastion](https://github.com/eli-pro-git/cft-tf-challenge/blob/master/image-2.png?raw=true)  
+  - Subnets/Routes: ![subnets route](https://github.com/eli-pro-git/cft-tf-challenge/blob/master/image-1.png?raw=true)  
+  - ALB Error / Service Limitation: ![ALB Error](https://github.com/eli-pro-git/cft-tf-challenge/blob/master/image.png?raw=true)
 
 > Rename the files as needed; update the paths above.
 
