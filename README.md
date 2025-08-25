@@ -1,311 +1,200 @@
 
----
 
-```markdown
-# VPC + Bastion + Private ASG + (Internal) ALB — Terraform PoC
+````markdown
+## Part 2 — SRE Operations, Analysis, and Improvements
+Architecture Diagram
+![alt text](image-4.png)
 
-> **Goal:** One VPC (`10.1.0.0/16`) with three subnets spread across two AZs, a public Bastion host, a private Application tier running Apache in an Auto Scaling Group (ASG), and an ALB that sends web traffic to the ASG. 
- ![poc-architecture-diagram](https://github.com/eli-pro-git/cft-tf-challenge/blob/master/poc-architecture-diagram.png?raw=true)
-> **Note:** If your account currently lacks ELB/ALB permissions, see **[Test Without ALB](#test-without-alb)**.
-![ALB error](https://github.com/eli-pro-git/cft-tf-challenge/blob/master/image.png?raw=true)
+> **Scope:** Operate the Terraform PoC as an SRE. Document risks, availability, cost, and ops gaps; propose and prioritize improvements; implement at least two; provide runbooks and evidence.
 
 ---
 
-## Architecture
+### What changed in Part 2 (summary)
 
-- **VPC:** `10.1.0.0/16`
-- **Subnets (all /24):**
-  - **Management** (public): `10.1.78.0/24` in `us-east-1b` — **internet-accessible**
-  - **Application** (private): `10.1.9.0/24` in `us-east-1b` — **no internet ingress**
-  - **Backend** (private): `10.1.21.0/24` in `us-east-1a` — **no internet ingress**
-- **IGW** for public subnet; **NAT** in public subnet for private outbound (e.g., package installs)
-- **Bastion EC2** (`t2.micro`) in Management subnet; SSH (22) allowed **only** from your `/32`
-- **App tier**: Launch Template + **ASG** (min=2, max=6, `t2.micro`), Apache installed via user data, runs in **Application subnet**
-- **ALB (internal)** across private subnets; HTTP(80) from Bastion SG → ALB, ALB → App SG
-
-### Diagram & Screenshots
-
-- **Diagram:**  
-  ![Architecture Diagram](https://github.com/eli-pro-git/cft-tf-challenge/blob/master/poc-architecture-diagram.png?raw=true)
-
-- **Screenshots:**  
-  - Bastion instance: ![Bastion](https://github.com/eli-pro-git/cft-tf-challenge/blob/master/image-2.png?raw=true)  
-  - Subnets/Routes: ![subnets route](https://github.com/eli-pro-git/cft-tf-challenge/blob/master/image-1.png?raw=true)  
-  - ALB Error / Service Limitation: ![ALB Error](https://github.com/eli-pro-git/cft-tf-challenge/blob/master/image.png?raw=true)
-
-> Rename the files as needed; update the paths above.
+- **Network hardening & HA**
+  - Expanded to **6 subnets** (2x management/public, 2x application/private, 2x backend/private) across **us-east-1a & 1b**.
+  - **One NAT Gateway per AZ** (egress survives single-AZ failure).
+- **Security**
+  - **IMDSv2 enforced** on bastion + app instances.
+- **Observability**
+  - **CloudWatch alarms + SNS** (ASG health, bastion health/CPU).
+  - **VPC Flow Logs → CloudWatch Logs** (30-day retention).
+- **Operations**
+  - **SSM Session Manager** enabled (keyless access & audit trail).
 
 ---
 
-## Repository Layout
+## A. Analysis of Deployed Infrastructure
 
-```
+### Security gaps
+- **Human SSH exposure** on bastion (keys can be mishandled; no session recording by default).  
+  *Mitigation:* Prefer **SSM Session Manager** for routine access; keep SSH for break-glass.
+- **Broad egress** (0.0.0.0/0) on app/bastion SGs (common for PoC).  
+  *Mitigation:* Restrict egress by destination (VPC endpoints, proxy).
+- **No WAF/HTTPS termination** (internal ALB; when made public, add ACM + WAF + TLS).
+- **No organization-wide audit** (CloudTrail org trail not configured here).  
+  *Mitigation:* Central CloudTrail + S3 immutable bucket (Object Lock).
 
-CTF-CHALLENGE/
-├─ main.tf
-├─ provider.tf
-├─ backend.tf
-├─ variables.tf
-├─ outputs.tf
-├─ modules/
-│  ├─ vpc/
-│  │  
-│  ├─ network/   # subnets, IGW, NAT, routes
-│  │  
-│  ├─ security/  # SGs for bastion, app, alb
-│  │  
-│  ├─ bastion/   # single EC2 in public subnet
-│  │  
-│  └─ alb/       # internal ALB + TG + listener
-│  │  
-│  └─ app/       # AMI + ASG + launch_template  for ec2's
-└─ README.md/
-    # docs + diagram & screenshots captured
+### Availability issues
+- App ASG now **multi-AZ** (application_a + application_b).  
+- NAT now **per AZ**; private egress remains during single-AZ impairment.  
+- Internal ALB (by design). If public access is required, add **2 public subnets** and flip ALB to internet-facing.
 
+### Cost optimization opportunities
+- **NAT Gateway x2**: hourly + data processing. In dev, consider:
+  - SSM/CloudWatch **Interface Endpoints** to reduce NAT traffic.
+  - Scheduled **ASG scale-in** off hours (min=1).
+- Use **t3.micro** (cheaper/more efficient) if performance acceptable.
+- Set **log retention** deliberately (30 days now; tune per policy).
+- Avoid idle EIPs/ALB in non-testing windows.
+
+### Operational shortcomings
+- No automated patching baseline (Patch Manager).  
+- No **backup plan** for app data (PoC serves static Apache page).  
+- No continuous config/compliance checks (AWS Config, tfsec/tflint in CI).  
+- Limited runbooks (addressed below).
+
+---
+
+## B. Improvement Plan (prioritized)
+
+| Priority | Improvement | Rationale | Status / Where |
+|---|---|---|---|
+| **P0** | **Enforce IMDSv2** on all EC2 | Reduce metadata/credential theft risk |  Implemented (`bastion` & `app` launch template) |
+| **P0** | **Baseline alarms + SNS** (ASG InService, bastion status/CPU) | Detect failures early |  Implemented (`observability` module) |
+| **P1** | **SSM Session Manager** | Keyless access, audit, no public SSH needed |  Implemented (`ssm` module) |
+| **P1** | **VPC Flow Logs → CW Logs** | Forensics, traffic anomaly detection |  Implemented (`vpc_flow_logs` module) |
+| **P1** | **Interface Endpoints** (SSM, SSM Messages, EC2 Messages, S3) | Reduce NAT cost/dependency | Next |
+| **P1** | **Public ALB option** (if needed): 2 public subnets, HTTPS (ACM), WAF | Internet exposure w/ security | Next |
+| **P2** | **Restrict egress** in SGs / use egress proxy | Least privilege | Next |
+| **P2** | **AWS Backup** plans for EBS/S3 (if state/data added) | Recoverability | Next |
+| **P2** | **Config + GuardDuty + Security Hub** | Continuous monitoring | Next |
+| **P3** | **CI checks** (tflint/tfsec), drift detection | Maintainability | Next |
+
+> **Implemented improvements (code):**  
+> 1) IMDSv2 enforcement (bastion + app LT)  
+> 2) CloudWatch alarms + SNS topic  
+> 3) SSM Session Manager (role/profile + attachments)  
+> 4) VPC Flow Logs (log group + role + flow log)
+
+---
+
+## C. Runbook (deploy, operate, outage, restore)
+
+### Deploy / Update (operator steps)
+1. **Initialize & plan**
+   ```bash
+   terraform init
+   terraform plan \
+     -var 'aws_region=us-east-1' \
+     -var 'vpc_cidr=10.1.0.0/16' \
+     -var 'project=cpmc' \
+     -var 'environment=dev' \
+     -var 'bastion_allowed_ssh_cidr=YOUR.IP/32' \
+     -var 'bastion_key_name=YOUR_KEYPAIR_NAME' \
+     -var 'alerts_email=YOUR.EMAIL@example.com'
 ````
 
----
+2. **Apply**
 
-## Requirements
+   ```bash
+   terraform apply -auto-approve ... (same vars)
+   ```
+3. **Post-apply**
 
-- Terraform **~> 1.6**
-- AWS Provider **~> 5.x**
-- AWS CLI configured (`aws sts get-caller-identity` works)
-- **Existing EC2 Key Pair** in the region (name only)
-- Your **public IP (/32)** for bastion SSH allowlist
+   * Confirm **SNS subscription email** (check inbox).
+   * Record outputs: `bastion_public_ip`, `alb_dns_name`, `alerts_topic_arn`, flow-logs log group.
 
----
+### Day-2 Ops (access, logs, checks)
 
-## Variables (high level)
+* **Access (preferred):** SSM
 
-Defined in `variables.tf` (root):
+  ```bash
+  aws ssm describe-instance-information --query 'InstanceInformationList[].InstanceId'
+  aws ssm start-session --target i-XXXXXXXXXXXX
+  ```
+* **Access (break-glass):** SSH to bastion, then to app.
+* **App health:** from bastion
 
-- `aws_region` (default: `us-east-1`)
-- `vpc_cidr` (default: `10.1.0.0/16`)
-- `project`, `environment` (used for naming/tags)
-- `subnets` map (pre-filled with your 3 subnets + AZs + public/private flags)
-- `bastion_allowed_ssh_cidr` (e.g., `203.0.113.45/32`)
-- `bastion_key_name` (your existing key pair name)
+  ```bash
+  curl -s http://$(terraform output -raw alb_dns_name)
+  systemctl status httpd
+  ```
+* **Logs & network:** CloudWatch Logs → `/vpc/<project>/<env>/flow-logs`; instance `/var/log/cloud-init*`.
 
----
+### EC2 (App) outage response
 
-## Deploy
+1. **Alarm fires** (ASG InService low). Check **Auto Scaling events** for failed launches/terminations.
+2. Verify **subnet/NAT** in affected AZ; check AMI accessibility, SG rules, instance profile.
+3. **Mitigate quickly:** temporarily increase desired capacity; if LT broken, roll back to last known good AMI/LT version.
+4. If ALB is used: check **Target health** and health check path `/`.
 
-```bash
-# From the repo root
-terraform init
+### “S3 bucket deleted” restore (when S3 is in scope)
 
-# Plan with your values
-terraform plan \
-  -var 'aws_region=us-east-1' \
-  -var 'vpc_cidr=10.1.0.0/16' \
-  -var 'project=cpmc' \
-  -var 'environment=dev' \
-  -var 'bastion_allowed_ssh_cidr=YOUR.IP.ADDR/32' \
-  -var 'bastion_key_name=YOUR_KEYPAIR_NAME'
+* **Prevention to implement:** S3 **Versioning**, **SSE**, **Block Public Access**, optional **MFA Delete**, **Object Lock** (compliance).
+* **Investigate:** CloudTrail to identify actor/time.
+* **Restore path:**
 
-# Apply
-terraform apply -auto-approve \
-  -var 'aws_region=us-east-1' \
-  -var 'vpc_cidr=10.1.0.0/16' \
-  -var 'project=cpmc' \
-  -var 'environment=dev' \
-  -var 'bastion_allowed_ssh_cidr=YOUR.IP.ADDR/32' \
-  -var 'bastion_key_name=YOUR_KEYPAIR_NAME'
-````
-
-**Outputs you’ll see** (examples):
-
-* `bastion_public_ip`, `bastion_private_ip`
-* `alb_dns_name` *(internal)*
-* `subnet_ids` (by name), route table IDs
-* `vpc_id`, `vpc_cidr_block`, `vpc_arn`
+  * If only objects deleted → **undelete** prior versions.
+  * If bucket deleted → recreate (name may be held briefly), **restore from backup/replica**, re-apply bucket policies/lifecycle & producers.
 
 ---
 
-## Security Groups (flow)
+## D. Evidence of Deployment
 
-* **Bastion SG**
+Place screenshots/outputs under `docs/assets/` and reference here:
 
-  * Ingress: `22/tcp` from **your /32** only
-  * Egress: all (for updates/tools)
-* **ALB SG**
+* **Subnets & routing (multi-AZ)** – console screenshots
+* **NAT per AZ** – console list (IDs in each AZ)
+* **ASG (min=2) across 1a/1b** – EC2 Auto Scaling view
+* **ALB (internal) active** – Target Group healthy targets
+* **Bastion reachable** – CLI output (public IP + SSM session)
+* **CloudWatch alarms** – list + one alarm test (see below)
+* **VPC Flow Logs** – log group with active streams
+* **Terraform apply logs** – excerpt showing created resources
 
-  * Ingress: `80/tcp` from **Bastion SG** (internal testing)
-  * Egress: all
-* **App SG**
-
-  * Ingress:
-
-    * `22/tcp` **from Bastion SG only** (admin)
-    * `80/tcp` **from ALB SG only** (web)
-  * Egress: all (out via NAT)
-
-This design keeps the app private; web hits go **Bastion → ALB → ASG instances**.
+> **Alarm test (optional):** temporarily set ASG `desired_capacity=0`, apply, wait for alarm, then revert to `2`.
 
 ---
 
-## Test With ALB (when enabled)
+## E. Design decisions & assumptions
 
-**From your laptop:**
+* **Internal ALB** by default: meets “ALB → ASG” privately; easily switchable to public when desired (add 2nd public subnet + ACM + WAF).
+* **NAT per AZ:** higher cost, higher resilience; chosen for **availability** of private egress.
+* **IMDSv2 enforced:** modern baseline to limit credential exposure vectors.
+* **SSM** over SSH for routine ops: central audit, least exposure.
+* **Broad egress for PoC:** retained for speed; plan to constrain with endpoints/proxy.
+* **No persistent app data** in PoC: Apache static page; backups marked as future work.
 
-```bash
-ssh -i /path/to/key.pem ec2-user@$(terraform output -raw bastion_public_ip)
-```
+---
 
-**From the bastion:**
+## F. How to reproduce the implemented improvements
 
-```bash
-# Resolve & hit the internal ALB
-nslookup $(terraform output -raw alb_dns_name)
-curl -s http://$(terraform output -raw alb_dns_name)
-```
+* **IMDSv2:**
 
-**Or port-forward from your laptop to browse locally:**
+  * Bastion: `aws_instance.bastion.metadata_options.http_tokens = "required"`
+  * App LT: `aws_launch_template.app.metadata_options.http_tokens = "required"`
+* **Observability:**
 
-```bash
-ssh -i /path/to/key.pem -L 8080:$(terraform output -raw alb_dns_name):80 ec2-user@$(terraform output -raw bastion_public_ip)
-# Then open http://localhost:8080
-```
+  * `modules/observability` → SNS topic + 3 alarms (ASG in-service low, bastion status check fail, bastion CPU high).
+* **SSM:**
 
-You should see the Apache page rendered by user-data:
+  * `modules/ssm` → role + instance profile; attached to bastion & app LT.
+  * Test: `aws ssm start-session --target <InstanceId>`
+* **VPC Flow Logs:**
+
+  * `modules/vpc_flow_logs` → log group (30 days), IAM role/policy, flow log resource (ALL traffic).
+
+---
+
+## G. References
+
+* AWS Well-Architected Framework (Security, Reliability, Cost)
+* Amazon EC2 Instance Metadata Service v2 (IMDSv2)
+* Amazon CloudWatch Alarms & Auto Scaling metrics
+* AWS Systems Manager Session Manager
+* Amazon VPC Flow Logs
+
+> See repository `modules/*` for exact Terraform implementation.
 
 ```
-<h1>CPMC App - <instance-hostname></h1>
-```
-
----
-
-## Test Without ALB
-
-If your account lacks access to create  ELB/ALB right now, you still can verify Apache on the app instances.
-
-### Option A — Temporary Terraform rule (preferred; revert after)
-
-1. In `modules/security/variables.tf`, add:
-
-```hcl
-variable "enable_temp_http_from_bastion" {
-  description = "TEMP: allow HTTP 80 from bastion directly to app instances for testing without ALB"
-  type        = bool
-  default     = false
-}
-```
-
-2. In `modules/security/main.tf`, add below existing rules:
-
-```hcl
-# TEMP TEST RULE: Allow HTTP 80 from bastion directly to app (bypassing ALB)
-resource "aws_security_group_rule" "app_http_from_bastion_temp" {
-  count                   = var.enable_temp_http_from_bastion ? 1 : 0
-  type                    = "ingress"
-  description             = "TEMP: HTTP 80 from bastion (no ALB available)"
-  from_port               = 80
-  to_port                 = 80
-  protocol                = "tcp"
-  source_security_group_id= aws_security_group.bastion.id
-  security_group_id       = aws_security_group.app.id
-}
-```
-
-3. Re-run with the toggle on:
-
-```bash
-terraform apply -auto-approve -var 'enable_temp_http_from_bastion=true' \
-  -var 'aws_region=us-east-1' -var 'vpc_cidr=10.1.0.0/16' \
-  -var 'project=cpmc' -var 'environment=dev' \
-  -var 'bastion_allowed_ssh_cidr=YOUR.IP/32' \
-  -var 'bastion_key_name=YOUR_KEYPAIR_NAME'
-```
-
-4. From the **bastion**, curl the **private IP** of an app instance (discover via EC2 console or `aws ec2 describe-instances` if you prefer):
-
-```bash
-curl -s http://<APP_INSTANCE_PRIVATE_IP>
-```
-
-> **Important:** After you confirm Apache works, **set `enable_temp_http_from_bastion=false` and apply** to remove the temporary rule.
-
-### Option B — Manual (quick & dirty; creates drift)
-
-* Add an inbound rule on the **App SG**: HTTP(80) from **Bastion SG**.
-* Test from bastion (`curl http://<app-private-ip>`).
-* **Remove the rule** afterwards.
-
----
-
-## Switching to Internet-Facing ALB (optional)
-
-AWS requires **≥ 2 public subnets in different AZs** for an internet-facing ALB.
-
-Steps (high level):
-
-1. Add a **second public subnet** in `us-east-1a` to the `subnets` map (`public = true`), associate it to the **public route table** (IGW route).
-2. In the **ALB module**, set `internal = false` and pass the **two public subnet IDs**.
-3. In **ALB SG**, allow `80/443` from your IP (or `0.0.0.0/0` if you truly want public).
-4. (Optional) Add ACM cert + HTTPS listener (443) and redirect 80→443.
-
----
-
-## Troubleshooting
-
-* **“ELB/ALB not available / access denied / service disabled”:**
-  Your AWS account or region may not have ELBv2 enabled or allowed. Contact AWS Support to enable **Elastic Load Balancing v2** or verify your **Service Control Policies** and **permissions**. In the meantime, use **[Test Without ALB](#test-without-alb)**.
-
-* **Private instances can’t `yum install`/update:**
-  Ensure the **NAT Gateway** is up in the public subnet and private route table has default route `0.0.0.0/0 → nat-gateway`.
-
-* **SSH to bastion fails:**
-
-  * Confirm `bastion_allowed_ssh_cidr` matches your current IP (`curl -4 ifconfig.me`).
-  * Ensure your **key pair** name exists in the region and you use the correct `.pem`.
-
-* **ALB health checks fail (when enabled):**
-
-  * App SG must allow HTTP(80) **from ALB SG**.
-  * Apache must be running (see user-data and `/var/log/cloud-init*`).
-
----
-
-## Cleanup
-
-```bash
-terraform destroy -auto-approve \
-  -var 'aws_region=us-east-1' \
-  -var 'vpc_cidr=10.1.0.0/16' \
-  -var 'project=cpmc' \
-  -var 'environment=dev' \
-  -var 'bastion_allowed_ssh_cidr=YOUR.IP/32' \
-  -var 'bastion_key_name=YOUR_KEYPAIR_NAME'
-```
-
-> Destroy order is handled by Terraform. NAT/EIP/ALB (when enabled) may take a minute to tear down.
-
----
-
-## Cost Notes
-
-* **NAT Gateway** and **ALB** incur hourly + data processing charges.
-* **EC2** instances (bastion + ASG) billed per-hour.
-* **EIP** is billed when allocated & **not** associated (or minimal when associated).
-
----
-
-## Security Notes
-
-* Public ingress limited to **SSH → Bastion** from your `/32`.
-* App instances are **private**; only ALB (or temporary rule during tests) can reach HTTP(80).
-* Everything else goes outbound through **NAT** (no inbound to private subnets from the internet).
-
----
-
-## What This PoC Demonstrates
-
-* Modular Terraform (VPC, Network, Security, Bastion, ALB, App)
-* Private application tier behind a load balancer
-* Least-privilege security group flows
-* Repeatable tagging & naming patterns
-* Clear upgrade path to a public ALB
-
----
-

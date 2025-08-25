@@ -23,9 +23,19 @@ resource "aws_instance" "bastion" {
 
   # Ensure it definitely gets a public IP in the public subnet
   associate_public_ip_address = true
-
+   # >>> For part two enhancement <<<
+  metadata_options {
+    http_endpoint = "enabled"
+    http_tokens   = "required"  # Enforce IMDSv2
+  }
   tags = merge(var.tags, {
     Name = "${lookup(var.tags, "Project", "proj")}-${lookup(var.tags, "Environment", "env")}-bastion"
     Role = "bastion"
   })
+}
+
+resource "aws_instance" "bastion" {
+  # ...existing config...
+  iam_instance_profile       = var.instance_profile_name  # <-- ADD
+  # ...existing config...
 }

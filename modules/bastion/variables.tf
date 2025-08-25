@@ -24,3 +24,8 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "instance_profile_name" {
+  description = "IAM instance profile name for SSM"
+  type        = string
+}

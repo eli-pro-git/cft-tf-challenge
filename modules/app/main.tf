@@ -32,14 +32,22 @@ resource "aws_launch_template" "app" {
   image_id      = data.aws_ami.amazon_linux2.id
   instance_type = var.instance_type
   key_name      = var.key_name
+  iam_instance_profile {
+    name = var.instance_profile_name
+  }
 
   network_interfaces {
     security_groups             = [var.security_group_id]
-    subnet_id                   = var.subnet_id
     associate_public_ip_address = false
   }
 
   user_data = base64encode(local.user_data)
+
+  # >>> Part 2 Enhancement <<<
+  metadata_options {
+    http_endpoint = "enabled"
+    http_tokens   = "required"  # Enforce IMDSv2
+  }
 
   tag_specifications {
     resource_type = "instance"
@@ -56,7 +64,9 @@ resource "aws_autoscaling_group" "app" {
   max_size                  = var.asg_max_size
   desired_capacity          = var.asg_min_size
   health_check_type         = "EC2"
-  vpc_zone_identifier       = [var.subnet_id]
+
+  # >>> KEY CHANGE: run across BOTH application subnets (multi-AZ) <<<
+  vpc_zone_identifier       = var.subnet_ids
 
   launch_template {
     id      = aws_launch_template.app.id

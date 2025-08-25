@@ -89,6 +89,9 @@ module "bastion" {
   # Instance type per requirements
   instance_type = "t2.micro"
 
+  # >>> NEW: attach SSM instance profile
+  instance_profile_name = module.ssm.instance_profile_name
+
   tags = {
     Project     = var.project
     Environment = var.environment
@@ -125,8 +128,8 @@ module "alb" {
   security_group_id = module.security.alb_sg_id
   # Two subnets in different AZs (required by ALB). Using your private subnets:
   subnet_ids = [
-    module.network.subnet_ids["application"], # us-east-1b
-    module.network.subnet_ids["backend"]      # us-east-1a
+    module.network.subnet_ids["application_a"], # us-east-1b
+    module.network.subnet_ids["application_b"]      # us-east-1a
   ]
 
   tags = {
@@ -139,8 +142,11 @@ module "alb" {
 # --- Step 4C: App (LT + ASG) in application subnet, attach to TG ---
 module "app" {
   source = "./modules/app"
-
-  subnet_id         = module.network.subnet_ids["application"]
+# >>> BOTH app subnets for Multi-AZ
+  subnet_ids       = [
+    module.network.subnet_ids["application_a"],
+    module.network.subnet_ids["application_b"]
+  ]
   security_group_id = module.security.app_sg_id
   key_name          = var.bastion_key_name
   instance_type     = "t2.micro"   # per requirements
@@ -148,6 +154,7 @@ module "app" {
   asg_max_size      = 6            # per requirements
 
   target_group_arn  = module.alb.target_group_arn
+  instance_profile_name   = module.ssm.instance_profile_name   # <-- NEW
 
   tags = {
     Project     = var.project
@@ -156,8 +163,56 @@ module "app" {
   }
 }
 
+module "ssm" {
+  source = "./modules/ssm"
+  tags = {
+    Project     = var.project
+    Environment = var.environment
+    ManagedBy   = "terraform"
+  }
+}
+
+
 # Helpful outputs
 output "alb_dns_name" {
   description = "Internal ALB DNS name (use from bastion)"
   value       = module.alb.alb_dns_name
+}
+
+module "observability" {
+  source               = "./modules/observability"
+  asg_name             = module.app.asg_name
+  bastion_instance_id  = module.bastion.instance_id
+  alerts_email         = var.alerts_email
+
+  tags = {
+    Project     = var.project
+    Environment = var.environment
+    ManagedBy   = "terraform"
+  }
+}
+
+output "alerts_topic_arn" {
+  description = "SNS topic ARN for alerts"
+  value       = module.observability.sns_topic_arn
+}
+
+
+module "vpc_flow_logs" {
+  source = "./modules/vpc_flow_logs"
+
+  vpc_id            = module.vpc.vpc_id
+  log_retention_days = 30   # adjust to your policy
+  traffic_type       = "ALL"
+
+  tags = {
+    Project     = var.project
+    Environment = var.environment
+    ManagedBy   = "terraform"
+  }
+}
+
+output "vpc_flow_logs_log_group" {
+  description = "Flow Logs CloudWatch Log Group"
+  value       = module.vpc_flow_logs.log_group_name
 }

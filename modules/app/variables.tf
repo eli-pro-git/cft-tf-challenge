@@ -1,7 +1,9 @@
-variable "subnet_id" {
-  description = "Application subnet ID (private) where ASG instances run"
-  type        = string
+# REPLACE the old 'subnet_id' variable with this:
+variable "subnet_ids" {
+  description = "Application subnet IDs (private) where ASG instances run (multi-AZ)"
+  type        = list(string)
 }
+
 
 variable "security_group_id" {
   description = "App instance security group ID"
@@ -40,4 +42,9 @@ variable "tags" {
   description = "Common tags"
   type        = map(string)
   default     = {}
+}
+
+variable "instance_profile_name" {
+  description = "IAM instance profile name for SSM"
+  type        = string
 }
