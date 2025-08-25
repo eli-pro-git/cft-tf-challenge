@@ -3,7 +3,7 @@
 ````markdown
 ## Part 2 — SRE Operations, Analysis, and Improvements
 Architecture Diagram
-![alt text](image-4.png)
+[image-4.png](https://github.com/eli-pro-git/cft-tf-challenge/blob/cfc-challenge-part-2/image-4.png?raw=true)
 
 > **Scope:** Operate the Terraform PoC as an SRE. Document risks, availability, cost, and ops gaps; propose and prioritize improvements; implement at least two; provide runbooks and evidence.
 
